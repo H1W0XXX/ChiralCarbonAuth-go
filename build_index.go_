@@ -1,0 +1,122 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+)
+
+const WorkerCount = 24 // 24 核
+
+type task struct {
+	Offset int64
+	MolStr string
+}
+
+func main() {
+	if len(os.Args) != 3 {
+		fmt.Println("用法: build_index <input.sdf> <output.index>")
+		os.Exit(1)
+	}
+	if err := buildIndexParallel(os.Args[1], os.Args[2]); err != nil {
+		fmt.Println("生成索引失败:", err)
+		os.Exit(1)
+	}
+	fmt.Println("索引生成完毕:", os.Args[2])
+}
+
+func buildIndexParallel(sdfPath, idxPath string) error {
+	inFile, err := os.Open(sdfPath)
+	if err != nil {
+		return err
+	}
+	defer inFile.Close()
+
+	outFile, err := os.Create(idxPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	writer := bufio.NewWriter(outFile)
+	defer writer.Flush()
+
+	runtime.GOMAXPROCS(WorkerCount)
+
+	taskCh := make(chan task, WorkerCount*4)
+	resultCh := make(chan int64, WorkerCount*4)
+
+	var wg sync.WaitGroup
+
+	// writer goroutine ―― 专门吃 resultCh，避免阻塞
+	var writeWg sync.WaitGroup
+	writeWg.Add(1)
+	go func() {
+		defer writeWg.Done()
+		for off := range resultCh {
+			fmt.Fprintf(writer, "%d\n", off)
+		}
+	}()
+
+	// worker pool
+	for i := 0; i < WorkerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskCh {
+				mol, err := ParseMolString(t.MolStr)
+				if err == nil {
+					Hydrogenate(mol)
+					if len(GetMoleculeChiralCarbons(mol)) >= 3 {
+						resultCh <- t.Offset
+					}
+				}
+			}
+		}()
+	}
+
+	// producer：读取 SDF，切分分子
+	reader := bufio.NewReader(inFile)
+	var (
+		molStart int64 = 0 // 当前分子的起始偏移
+		offset   int64 = 0 // 已经读过的总字节数
+		molBuf   strings.Builder
+	)
+	for {
+		// 记录这行开始前的偏移
+
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return err
+		}
+		// 本次读了多少字节
+		offset += int64(len(line))
+
+		if strings.TrimSpace(line) == "$$$$" {
+			// 遇到 SDF 的分子分隔符，输出上一段分子
+			taskCh <- task{
+				Offset: molStart,
+				MolStr: molBuf.String(),
+			}
+			// 下一个分子从这里开始
+			molBuf.Reset()
+			molStart = offset
+		} else {
+			molBuf.WriteString(line)
+		}
+
+		if err == io.EOF {
+			break
+		}
+	}
+	// 收尾
+	close(taskCh) // 不再派任务
+	wg.Wait()     // 等全部 worker 处理完
+	close(resultCh)
+	writeWg.Wait() // 等 writer 把结果写完
+
+	return nil
+}

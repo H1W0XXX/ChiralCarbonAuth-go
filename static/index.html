@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>手性碳验证码</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            text-align: center;
+            padding: 2rem;
+        }
+        h1 {
+            margin-bottom: 1.5rem;
+        }
+        #buttons {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        #container {
+            text-align: center; /* 图片区域居中 */
+        }
+        #container img {
+            max-width: 90%;
+            height: auto;
+            margin: 1rem auto;
+            display: inline-block;
+        }
+        .options {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 1rem 0;
+        }
+        .row {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .option {
+            display: flex;
+            align-items: center;
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 0.4rem 0.8rem;
+            font-size: 1rem;
+        }
+        .option input {
+            margin-right: 0.4rem;
+        }
+        #message {
+            margin-top: 1rem;
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+<h1>手性碳验证码</h1>
+<div>
+    <button id="loadBtn">加载验证码</button>
+    <button id="verifyBtn" disabled>验证选择</button>
+</div>
+<div id="container"></div>
+<div class="options" id="options"></div>
+<div id="message"></div>
+
+<script>
+    let currentUUID = null;
+
+    document.getElementById('loadBtn').onclick = async () => {
+        document.getElementById('message').textContent = '';
+        document.getElementById('options').innerHTML = '';
+        document.getElementById('container').innerHTML = '';
+        document.getElementById('verifyBtn').disabled = true;
+
+        const res = await fetch('/api/challenge/start');
+        const data = await res.json();
+        currentUUID = data.uuid;
+
+        const img = document.createElement('img');
+        img.src = data.image;
+        document.getElementById('container').appendChild(img);
+
+        const opts = document.getElementById('options');
+
+        const regions = data.regions;
+        const total = regions.length;
+        const cols = Math.ceil(Math.sqrt(total)); // 估计列数，比如总共16个，就4列
+        const rows = Math.ceil(total / cols);
+
+        // 动态重排：列优先（转成 rows 行，每行 cols 个）
+        const matrix = [];
+        for (let r = 0; r < rows; r++) {
+            matrix[r] = [];
+        }
+        for (let c = 0; c < cols; c++) {
+            for (let r = 0; r < rows; r++) {
+                const idx = c * rows + r;
+                if (idx < regions.length) {
+                    matrix[r].push(regions[idx]);
+                }
+            }
+        }
+
+        matrix.forEach(row => {
+            const rowDiv = document.createElement('div');
+            rowDiv.className = 'row'; // 每一行独立div
+            row.forEach(region => {
+                const label = document.createElement('label');
+                label.className = 'option';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.value = region;
+                cb.onchange = () => {
+                    document.getElementById('verifyBtn').disabled =
+                        document.querySelectorAll('#options input:checked').length === 0;
+                };
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(region));
+                rowDiv.appendChild(label);
+            });
+            opts.appendChild(rowDiv); // 添加整行
+        });
+
+        document.getElementById('verifyBtn').disabled = true;
+    };
+
+    document.getElementById('verifyBtn').onclick = async () => {
+        const checked = Array.from(
+            document.querySelectorAll('#options input:checked')
+        ).map(cb => cb.value);
+
+        const payload = {
+            uuid: currentUUID,
+            selections: checked
+        };
+        const res = await fetch('/api/challenge/verify', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        const messageElem = document.getElementById('message');
+        messageElem.textContent = result.message;
+        messageElem.style.color = result.success ? 'green' : 'red';
+    };
+</script>
+
+</body>
+</html>
