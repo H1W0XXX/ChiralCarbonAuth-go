@@ -14,7 +14,7 @@ def read_index_file(index_file):
 def read_sdf_by_offset(sdf_file, offsets):
     """根据索引文件中的偏移量，读取对应的分子数据"""
     molecules = []
-    with open(sdf_file, 'r') as f:
+    with open(sdf_file, 'rb') as f:
         for offset in offsets:
             f.seek(offset)
             mol_str = ''
@@ -40,7 +40,7 @@ def filter_molecules(molecules):
 def write_filtered_molecules(output_sdf_file, filtered_molecules):
     """将筛选后的分子写入新的 SDF 文件，并返回它们的偏移量"""
     offsets = []
-    with open(output_sdf_file, 'w') as f:
+    with open(output_sdf_file, 'wb') as f:
         for mol in filtered_molecules:
             offset = f.tell()  # 记录当前分子在文件中的起始位置
             f.write(mol)       # 写入分子（已包含 $$$$ 分隔符）
