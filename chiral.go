@@ -1,198 +1,207 @@
 // File: chiral.go
 package main
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
+
+// Molecule 中添加的缓存字段示例：
+// bondIDMap map[Bond]int
+// atomBondMap map[int][]int
+// chainTTL    int
 
 // GetMoleculeChiralCarbons returns all chiral carbon atom indices (1-based).
-func GetMoleculeChiralCarbons(mol *Molecule) []int {
-	var result []int
-	for i := 1; i <= len(mol.Atoms); i++ {
-		if IsChiralCarbon(mol, i) {
-			result = append(result, i)
+func GetMoleculeChiralCarbons(m *Molecule) []int {
+	Hydrogenate(m)  // 确保隐式 HCount 正确
+	m.buildCaches() // 初始化缓存
+
+	var out []int
+	//fmt.Printf("→ Molecule: %d atoms, %d bonds\n", len(m.Atoms), len(m.Bonds))
+	for zero := range m.Atoms {
+		// 打印每个原子的初始信息
+		//atom := &m.Atoms[zero]
+		//bondIDs := m.atomBondMap[zero]
+		//fmt.Printf("Atom %2d (%s): bonds=%v, HCount=%d\n",
+		//	zero+1, atom.Element, bondIDs, atom.HCount,
+		//)
+		if m.isChiralCarbon0(zero) {
+			//fmt.Printf("  -> CHIRAL!\n")
+			out = append(out, zero+1)
 		}
 	}
-	return result
+	//fmt.Printf("=> Chiral Carbons: %v\n", out)
+	return out
 }
 
+// GetAtomDeclaredBonds returns all bonds connected to atom at 1-based index idx.
+// 兼容旧代码调用：Hydrogenate 等也可继续使用。
 func (m *Molecule) GetAtomDeclaredBonds(idx int) []Bond {
-	zeroIdx := idx - 1
-	var ret []Bond
-	for _, b := range m.Bonds {
-		if int(b.From) == zeroIdx || int(b.To) == zeroIdx {
-			ret = append(ret, b)
-		}
+	m.buildCaches()
+	zero := idx - 1
+	ids := m.atomBondMap[zero]
+	out := make([]Bond, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, m.Bonds[id-1])
 	}
-	return ret
+	return out
 }
 
-// GetBondID 返回给定 Bond 在 Molecule.Bonds 切片中的 1-based 索引，找不到返回 -1
-func (m *Molecule) GetBondID(target Bond) int {
-	for i, b := range m.Bonds {
-		if b == target {
-			return i + 1
-		}
-	}
-	return -1
-}
-
-// GetAtom 返回指定索引的原子 (1-based 索引)
-func (m *Molecule) GetAtom(idx int) Atom {
-	return m.Atoms[idx-1]
-}
-
-// GetBond 返回指定索引的键 (1-based 索引)
-func (m *Molecule) GetBond(idx int) Bond {
-	return m.Bonds[idx-1]
-}
-
-// IsChiralCarbon determines if the atom at the given 1-based index is a chiral carbon.
-func IsChiralCarbon(mol *Molecule, index int) bool {
-	if mol.GetAtom(index).Element != "C" {
+// isChiralCarbon0 determines if the atom at zero-based index c0 is a chiral carbon.
+// Assumes m.buildCaches() has been called so that m.atomBondMap and m.chainTTL are initialized.
+// isChiralCarbon0 determines if the atom at zero-based index c0 is a chiral carbon.
+func (m *Molecule) isChiralCarbon0(c0 int) bool {
+	a := &m.Atoms[c0]
+	// 跳过非碳
+	if a.Element != "C" {
 		return false
 	}
-	zeroIdx := index - 1
-	bonds := mol.GetAtomDeclaredBonds(index)
 
-	hcnt := mol.GetAtom(index).HCount
-	var nonHBonds []Bond
+	bondIDs := m.atomBondMap[c0]
+	hcnt := a.HCount
+	var nonHBonds []int
 
-	for _, b := range bonds {
-		// 先算出另一个原子的 zero-based 索引
-		var nbZero int
-		if int(b.From) == zeroIdx {
-			nbZero = int(b.To)
-		} else {
-			nbZero = int(b.From)
+	//fmt.Printf("  Checking C atom %d: initial H=%d, bonds=%v\n", c0+1, hcnt, bondIDs)
+	// 分类 H / 非-H
+	for _, bid := range bondIDs {
+		b := m.Bonds[bid-1]
+		other0 := b.From // 直接取 0-based
+		if other0 == c0 {
+			other0 = b.To
 		}
-		// 再转成 one-based
-		otherIdx := nbZero + 1
-
-		other := mol.GetAtom(otherIdx)
-		decl := mol.GetAtomDeclaredBonds(otherIdx)
-
-		if other.Element == "H" && len(decl) == 1 {
+		other := &m.Atoms[other0]
+		declIDs := m.atomBondMap[other0]
+		if other.Element == "H" && len(declIDs) == 1 {
 			hcnt++
 		} else {
-			nonHBonds = append(nonHBonds, b)
+			nonHBonds = append(nonHBonds, bid)
 		}
 	}
-	// Check 4+0 or 3+1 substitution pattern
-	if len(nonHBonds) == 4 && hcnt == 0 {
-		// compare all 6 pairs
-		ids := make([]int, 4)
-		for i := 0; i < 4; i++ {
-			ids[i] = mol.GetBondID(nonHBonds[i])
+	//fmt.Printf("    after classify: H=%d, nonHBonds=%v\n", hcnt, nonHBonds)
+
+	var pairs [][2]int
+	switch {
+	case len(nonHBonds) == 4 && hcnt == 0:
+		pairs = [][2]int{{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}
+	case len(nonHBonds) == 3 && hcnt == 1:
+		pairs = [][2]int{{0, 1}, {0, 2}, {1, 2}}
+	default:
+		//fmt.Printf("    → not 4+0/3+1 pattern\n")
+		return false
+	}
+
+	for _, p := range pairs {
+		visited := make(map[[4]int]bool)
+		if m.compareChainRec(c0, c0, nonHBonds[p[0]], nonHBonds[p[1]], m.chainTTL, visited) {
+			//fmt.Printf("    → chains %v match, not chiral\n", p)
+			return false
 		}
-		pairs := [][2]int{{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}
-		for _, p := range pairs {
-			if CompareChain(mol, index, ids[p[0]], ids[p[1]]) {
-				return false
-			}
+	}
+	return true
+}
+
+// buildCaches initializes caching structures for quick lookups
+func (m *Molecule) buildCaches() {
+	if m.bondIDMap != nil {
+		return
+	}
+	fmt.Println("Building caches...")
+	m.bondIDMap = make(map[Bond]int, len(m.Bonds))
+	m.atomBondMap = make(map[int][]int, len(m.Atoms))
+	m.chainTTL = 3 + int(math.Sqrt(float64(len(m.Atoms))))
+
+	for i, b := range m.Bonds {
+		id := i + 1
+		m.bondIDMap[b] = id
+		// Bond.From/To are zero-based indices
+		from0 := int(b.From)
+		to0 := int(b.To)
+		if from0 < 0 || from0 >= len(m.Atoms) || to0 < 0 || to0 >= len(m.Atoms) {
+			panic(fmt.Sprintf("buildCaches: invalid bond %v endpoints", b))
 		}
-		return true
-	} else if len(nonHBonds) == 3 && hcnt == 1 {
-		// compare 3 pairs
-		ids := make([]int, 3)
-		for i := 0; i < 3; i++ {
-			ids[i] = mol.GetBondID(nonHBonds[i])
-		}
-		pairs := [][2]int{{0, 1}, {0, 2}, {1, 2}}
-		for _, p := range pairs {
-			if CompareChain(mol, index, ids[p[0]], ids[p[1]]) {
-				return false
-			}
-		}
+		m.atomBondMap[from0] = append(m.atomBondMap[from0], id)
+		m.atomBondMap[to0] = append(m.atomBondMap[to0], id)
+	}
+}
+
+// compareChainRec recursively compares two substituent chains for identity, with cycle detection
+func (m *Molecule) compareChainRec(atom1, atom2, chain1, chain2, ttl int, visited map[[4]int]bool) bool {
+	key := [4]int{atom1, atom2, chain1, chain2}
+	if visited[key] {
 		return true
 	}
-	return false
-}
+	visited[key] = true
 
-// CompareChain checks if two chains from the center bond outwards are identical.
-func CompareChain(mol *Molecule, center, c1, c2 int) bool {
-	ttl := int(3 + math.Sqrt(float64(len(mol.Atoms))))
-	return compareChainRec(mol, center, center, c1, c2, ttl)
-}
-
-func compareChainRec(mol *Molecule, atom1, atom2, chain1, chain2, ttl int) bool {
 	if ttl < 0 {
 		return true
 	}
-	// Invalid bond ID => treat as matching end
-	if chain1 < 1 || chain2 < 1 || chain1 > len(mol.Bonds) || chain2 > len(mol.Bonds) {
+	if chain1 < 1 || chain2 < 1 || chain1 > len(m.Bonds) || chain2 > len(m.Bonds) {
 		return true
 	}
-	b1 := mol.GetBond(chain1)
-	b2 := mol.GetBond(chain2)
-	// —— 1. 把 atom1/atom2 转成 0-based
-	zeroAtom1 := atom1 - 1
-	zeroAtom2 := atom2 - 1
-	// —— 2. 找到下一个原子的 0-based 索引
-	var nextZero1, nextZero2 int
-	if int(b1.From) == zeroAtom1 {
-		nextZero1 = int(b1.To)
+
+	b1 := m.Bonds[chain1-1]
+	b2 := m.Bonds[chain2-1]
+
+	// Find next atoms
+	var next1, next2 int
+	if int(b1.From) == atom1 {
+		next1 = int(b1.To)
 	} else {
-		nextZero1 = int(b1.From)
+		next1 = int(b1.From)
 	}
-	if int(b2.From) == zeroAtom2 {
-		nextZero2 = int(b2.To)
+	if int(b2.From) == atom2 {
+		next2 = int(b2.To)
 	} else {
-		nextZero2 = int(b2.From)
+		next2 = int(b2.From)
 	}
 
-	// —— 3. 转回 1-based
-	n1 := nextZero1 + 1
-	n2 := nextZero2 + 1
-
+	// Compare bond order and element
 	if b1.Order != b2.Order {
 		return false
 	}
-	// Element check
-	a1 := mol.GetAtom(n1)
-	a2 := mol.GetAtom(n2)
+	a1 := &m.Atoms[next1]
+	a2 := &m.Atoms[next2]
 	if a1.Element != a2.Element {
 		return false
 	}
-	// Count H and collect substituents
+
+	// Count implicit H and gather substituents
 	h1, h2 := a1.HCount, a2.HCount
-	bonds1 := mol.GetAtomDeclaredBonds(n1)
-	bonds2 := mol.GetAtomDeclaredBonds(n2)
+	bonds1 := m.atomBondMap[next1]
+	bonds2 := m.atomBondMap[next2]
 	var subs1, subs2 []int
-	for _, b := range bonds1 {
-		if b == b1 {
+	for _, bid := range bonds1 {
+		if bid == chain1 {
 			continue
 		}
-		other := b.From
-		if other == n1 {
-			other = b.To
+		b := m.Bonds[bid-1]
+		other0 := int(b.From)
+		if other0 == next1 {
+			other0 = int(b.To)
 		}
-		if other < 1 || other > len(mol.Atoms) {
-			continue
-		}
-		oa := mol.GetAtom(other)
-		decl := mol.GetAtomDeclaredBonds(other)
-		if oa.Element == "H" && len(decl) == 1 {
+		other := &m.Atoms[other0]
+		declIDs := m.atomBondMap[other0]
+		if other.Element == "H" && len(declIDs) == 1 {
 			h1++
 		} else {
-			subs1 = append(subs1, mol.GetBondID(b))
+			subs1 = append(subs1, bid)
 		}
 	}
-	for _, b := range bonds2 {
-		if b == b2 {
+	for _, bid := range bonds2 {
+		if bid == chain2 {
 			continue
 		}
-		other := b.From
-		if other == n2 {
-			other = b.To
+		b := m.Bonds[bid-1]
+		other0 := int(b.From)
+		if other0 == next2 {
+			other0 = int(b.To)
 		}
-		if other < 1 || other > len(mol.Atoms) {
-			continue
-		}
-		oa := mol.GetAtom(other)
-		decl := mol.GetAtomDeclaredBonds(other)
-		if oa.Element == "H" && len(decl) == 1 {
+		other := &m.Atoms[other0]
+		declIDs := m.atomBondMap[other0]
+		if other.Element == "H" && len(declIDs) == 1 {
 			h2++
 		} else {
-			subs2 = append(subs2, mol.GetBondID(b))
+			subs2 = append(subs2, bid)
 		}
 	}
 	if h1 != h2 || len(subs1) != len(subs2) {
@@ -201,12 +210,12 @@ func compareChainRec(mol *Molecule, atom1, atom2, chain1, chain2, ttl int) bool 
 	if len(subs1) == 0 {
 		return true
 	}
+
 	ttl--
-	// Recursively compare substituent chains
 	for _, id1 := range subs1 {
 		matched := false
 		for _, id2 := range subs2 {
-			if compareChainRec(mol, n1, n2, id1, id2, ttl) {
+			if m.compareChainRec(next1, next2, id1, id2, ttl, visited) {
 				matched = true
 				break
 			}
@@ -216,4 +225,11 @@ func compareChainRec(mol *Molecule, atom1, atom2, chain1, chain2, ttl int) bool 
 		}
 	}
 	return true
+}
+
+// CompareChain provides a public wrapper for chain comparison if needed
+func CompareChain(m *Molecule, center, c1, c2 int) bool {
+	m.buildCaches()
+	visited := make(map[[4]int]bool)
+	return m.compareChainRec(center, center, c1, c2, m.chainTTL, visited)
 }
