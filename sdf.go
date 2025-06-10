@@ -25,6 +25,11 @@ type Bond struct {
 type Molecule struct {
 	Atoms []Atom
 	Bonds []Bond
+
+	// —— 新增缓存 ——
+	bondIDMap   map[Bond]int  // Bond→1-based ID
+	atomBondMap map[int][]int // atom 0-based idx → list of bond‐indices (1-based)
+	chainTTL    int
 }
 
 func pickRandomOffset(offsets []int64) int64 {
