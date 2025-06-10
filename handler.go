@@ -47,18 +47,22 @@ func handleStart(w http.ResponseWriter, r *http.Request) {
 	var chiral []int
 	var err error
 	for attempt := 0; attempt < 5; attempt++ {
-		mol, err = pickRandomMoleculeFromIndexed("Compound_156500001_157000000.sdf", "Compound_156500001_157000000.index")
+		mol, err = pickRandomMoleculeFromIndexed("output.sdf", "output.index")
 		if err != nil {
+			fmt.Println("err:", err)
 			continue
 		}
 		Hydrogenate(mol)
 		chiral = GetMoleculeChiralCarbons(mol)
+		fmt.Println("Result:", chiral)
 		if len(chiral) >= 3 {
 			break
 		}
 	}
 	if len(chiral) < 3 {
 		http.Error(w, "not enough chiral carbons, try again", http.StatusInternalServerError)
+		//fmt.Println("Result:", chiral)
+		//fmt.Println(chiral)
 		return
 	}
 
