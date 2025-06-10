@@ -74,8 +74,8 @@ go run main.go handler.go render_molecule.go sdf.go types.go utils.go chiral.go
 或先编译：
 
 ```bash
-go build -o auth_server.exe main.go handler.go render_molecule.go sdf.go types.go utils.go chiral.go
-.\auth_server.exe
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./startAuth main.go handler.go render_molecule.go sdf.go types.go utils.go chiral.go
+./startAuth
 ```
 
 访问浏览器：
