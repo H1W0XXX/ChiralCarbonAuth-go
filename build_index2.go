@@ -120,8 +120,8 @@ func buildIndexParallel(sdfPath, idxPath string) error {
 			return err
 		}
 		offset += int64(len(line))
-
-		if strings.TrimSpace(line) == "$$$$" {
+		if strings.TrimRight(line, "\r\n") == "$$$$" {
+			//if strings.TrimSpace(line) == "$$$$" {
 			// 记录分子进度
 			if molStart > resumeProcOffset {
 				taskCh <- task{
@@ -175,3 +175,6 @@ func writeProgress(filename, progressLine string) error {
 
 	return nil
 }
+
+// 把这个文件改成main.go编译建立索引
+// go build -o z:\build_index.exe main.go handler.go render_molecule.go sdf.go types.go utils.go chiral.go
